@@ -28,11 +28,11 @@ def get_document_loader(docs_dir):
             glob=glob_pattern,
             loader_cls=loader_cls
         )
-        try:
-            documents = loader.load()
-            all_documents.extend(documents)
-            print(f"已加载 {len(documents)} 个{glob_pattern[3:]}文件")
-        except Exception as e:
-            print(f"加载{glob_pattern[3:]}文件时出错: {str(e)}")
+        # try:
+        documents = loader.load()
+        all_documents.extend(documents)
+        print(f"已加载 {len(documents)} 个{glob_pattern[3:]}文件")
+            # except Exception as e:
+            #     print(f"加载{glob_pattern[3:]}文件时出错: {str(e)}")
     
     return all_documents

@@ -1,7 +1,3 @@
-"""
-RAG知识库系统 - 现代化可视化界面
-使用PySide6创建现代化、美观的图形界面
-"""
 import os
 import sys
 import time
@@ -139,7 +135,7 @@ class DocumentManagerDialog(QDialog):
                 return
 
             # 获取所有支持的文档文件
-            supported_extensions = ['.pdf', '.doc', '.docx', '.txt']
+            supported_extensions = ['.pdf', '.doc', '.docx', '.txt','.md']
             documents = []
 
             for root, dirs, files in os.walk(docs_dir):
@@ -324,29 +320,32 @@ class UpdateKnowledgeBaseWorker(QThread):
 
             import subprocess
 
+            result = subprocess.run([sys.executable, script_path], check=True)
+            self.finished.emit("知识库更新完成！")
+
             # 运行更新脚本
-            process = subprocess.Popen(
-                [sys.executable, script_path],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
-                universal_newlines=True
-            )
+            # process = subprocess.Popen(
+            #     [sys.executable, script_path],
+            #     stdout=subprocess.PIPE,
+            #     stderr=subprocess.STDOUT,
+            #     text=True,
+            #     bufsize=1,
+            #     universal_newlines=True
+            # )
 
-            # 实时读取输出
-            while True:
-                output = process.stdout.readline()
-                if output == '' and process.poll() is not None:
-                    break
-                if output:
-                    self.output_update.emit(output.strip())
+            # # 实时读取输出
+            # while True:
+            #     output = process.stdout.readline()
+            #     if output == '' and process.poll() is not None:
+            #         break
+            #     if output:
+            #         self.output_update.emit(output.strip())
 
-            return_code = process.poll()
-            if return_code == 0:
-                self.finished.emit("知识库更新完成！")
-            else:
-                self.error.emit(f"知识库更新失败，返回码: {return_code}")
+            # return_code = process.poll()
+            # if return_code == 0:
+            #     self.finished.emit("知识库更新完成！")
+            # else:
+            #     self.error.emit(f"知识库更新失败，返回码: {return_code}")
 
         except Exception as e:
             self.error.emit(f"更新知识库出错: {str(e)}")
@@ -423,7 +422,7 @@ class SimpleRAGTkApp(QMainWindow):
         self.batch_worker = None
         self.update_kb_worker = None
         
-        self.setWindowTitle("RAG知识库问答系统")
+        self.setWindowTitle("面向多学科学习的RAG智能助手")
         self.setGeometry(100, 100, 1000, 700)
         self.setMinimumSize(800, 600)
         
@@ -496,7 +495,7 @@ class SimpleRAGTkApp(QMainWindow):
     def create_widgets(self):
         """创建GUI组件"""
         # 标题区域
-        title_label = QLabel("RAG知识库问答系统")
+        title_label = QLabel("面向多学科学习的RAG智能助手")
         title_label.setAlignment(Qt.AlignCenter)
         title_font = QFont("Microsoft YaHei", 18, QFont.Bold)
         title_label.setFont(title_font)
@@ -894,6 +893,20 @@ class SimpleRAGTkApp(QMainWindow):
         self.show_progress(True)
         self.docs_btn.setEnabled(False)
 
+        # 清理现有的agent实例以释放数据库连接
+        # if self.agent:
+        #     try:
+        #         self.agent.cleanup()
+        #         del self.agent
+        #         self.agent = None
+        #         self.append_to_chat("已清理现有知识库连接")
+        #     except Exception as e:
+        #         self.append_to_chat(f"清理现有连接时出现警告: {str(e)}")
+
+        # 强制垃圾回收
+        # import gc
+        # gc.collect()
+
         # 清理之前的更新线程
         if self.update_kb_worker is not None:
             self.update_kb_worker.quit()
@@ -964,12 +977,12 @@ def main():
     app = QApplication(sys.argv)
 
     # 设置应用信息
-    app.setApplicationName("RAG知识库问答系统")
+    app.setApplicationName("面向多学科学习的RAG智能助手")
     app.setApplicationVersion("2.0")
     app.setOrganizationName("RAG System")
 
     # 设置应用图标（如果有的话）
-    # app.setWindowIcon(QIcon("icon.png"))
+    app.setWindowIcon(QIcon("icon.png"))
 
     window = SimpleRAGTkApp()
     window.show()

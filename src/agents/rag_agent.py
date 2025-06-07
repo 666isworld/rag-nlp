@@ -98,7 +98,7 @@ class RAGAgent:
             embedding=self.embeddings,
             persist_directory=self.persist_dir
         )
-        vector_store.persist()
+        # vector_store.persist()
         return vector_store
 
     def query(self, question: str) -> str:
@@ -155,10 +155,37 @@ class RAGAgent:
 
     def ingest_documents(self) -> None:
         """重新初始化带有当前文档的向量存储。"""
+        # 先清理现有连接
+        self.cleanup()
+
         if os.path.exists(self.persist_dir):
             import shutil
             shutil.rmtree(self.persist_dir)
         self.vector_store = self._initialize_vector_store()
+
+    def cleanup(self):
+        """清理资源，关闭数据库连接"""
+        try:
+            if hasattr(self, 'vector_store') and self.vector_store:
+                # 尝试关闭Chroma连接
+                if hasattr(self.vector_store, '_client'):
+                    # if hasattr(self.vector_store._client, 'reset'):
+                    #     self.vector_store._client.reset()
+                    if hasattr(self.vector_store._client, '_system'):
+                        if hasattr(self.vector_store._client._system, 'stop'):
+                            self.vector_store._client._system.stop()
+
+                # 删除向量存储引用
+                del self.vector_store
+                self.vector_store = None
+
+        except Exception as e:
+            print(f"清理资源时出现警告: {e}")
+
+    def __del__(self):
+        """析构函数，确保资源被清理"""
+        self.cleanup()
+
     def get_completion(self, prompt):
         '''使用LLM获取对提示的响应'''
         return self.llm.predict(prompt)
