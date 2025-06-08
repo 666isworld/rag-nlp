@@ -8,7 +8,7 @@ class RAGPromptTemplates:
     @staticmethod
     def get_chinese_qa_template():
         """获取中文问答提示词模板"""
-        return """你是一个智能医疗助手，你的任务是根据提供的文档内容回答用户问题。
+        return """你是一个面向多学科学习的RAG智能助手，你的任务是根据提供的文档内容回答用户问题。
         
 文档内容:
 {context}
@@ -46,7 +46,7 @@ Answer:"""
     @staticmethod
     def get_chinese_template_with_history():
         """获取带历史对话的中文提示词模板"""
-        return """你是一个智能医疗助手，你的任务是根据提供的文档内容回答用户问题。
+        return """你是一个面向多学科学习的RAG智能助手，你的任务是根据提供的文档内容回答用户问题。
         
 文档内容:
 {context}

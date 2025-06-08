@@ -7,6 +7,8 @@ from dotenv import load_dotenv
 
 # 使用最新的包路径
 from langchain.text_splitter import RecursiveCharacterTextSplitter
+
+from src.prompts.rag_prompts import RAGPromptTemplates
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_chroma import Chroma
 from langchain.memory import ConversationBufferMemory
@@ -24,7 +26,8 @@ class RAGAgent:
         docs_dir: str = "docs", 
         persist_dir: str = "db", 
         api_base: str = None, 
-        api_key: str = None
+        api_key: str = None,
+        model_name: str = "all-MiniLM-L6-v2"
     ):
         """
         初始化RAG代理
@@ -45,7 +48,7 @@ class RAGAgent:
         os.makedirs(persist_dir, exist_ok=True)
         
         # 初始化组件
-        self.embeddings = HuggingFaceEmbeddings(model_name="E:/code/python/rag-knowledge-base/models/all-MiniLM-L6-v2")
+        self.embeddings = HuggingFaceEmbeddings(model_name=f"E:/code/python/rag-knowledge-base/models/{model_name}")
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=1000,
             chunk_overlap=200
@@ -59,15 +62,31 @@ class RAGAgent:
             self.llm = ChatOpenAI(
                 temperature=0.7,
                 openai_api_base=api_base,
-                openai_api_key=api_key
+                openai_api_key=api_key,
+                model_name='gpt-4o-mini'
             )
         else:
-            self.llm = ChatOpenAI(temperature=0.7)
+            self.llm = ChatOpenAI(temperature=0.7,model_name='gpt-4o-mini')
+        
+        # 初始化检索链
+        # self.qa_chain = ConversationalRetrievalChain.from_llm(
+        #     llm=self.llm,
+        #     retriever=self.vector_store.as_retriever(),
+        # )
+
+        self.memory = ConversationBufferMemory(
+            memory_key="chat_history",
+            return_messages=True,
+            output_key="answer"  # 明确指定输出键
+        )
         
         # 初始化检索链
         self.qa_chain = ConversationalRetrievalChain.from_llm(
             llm=self.llm,
             retriever=self.vector_store.as_retriever(),
+            memory=self.memory,
+            return_source_documents=True,  # 返回源文档
+            verbose=True
         )
 
     def _initialize_vector_store(self) -> Chroma:
@@ -92,6 +111,9 @@ class RAGAgent:
         # 拆分文档
         splits = self.text_splitter.split_documents(documents)
         
+        import chromadb
+        chromadb.api.client.SharedSystemClient.clear_system_cache()
+        
         # 创建并持久化向量存储
         vector_store = Chroma.from_documents(
             documents=splits,
@@ -102,6 +124,27 @@ class RAGAgent:
         return vector_store
 
     def query(self, question: str) -> str:
+        # if not self.vector_store:
+        #     return "知识库尚未初始化，请先加载文档"
+            
+        # # 从知识库中检索相关文档
+        # docs = self.vector_store.similarity_search(question, k=3)
+        
+        # # 构建上下文
+        # context = "\\n\\n".join([doc.page_content for doc in docs])
+        
+        # # 使用提示词模板
+        # template = RAGPromptTemplates.get_chinese_qa_template()
+        # prompt = template.format(context=context, question=question)
+        
+        # # 调用LLM
+        # messages = [
+        #     {"role": "user", "content": prompt}
+        # ]
+        
+        # response = self._call_llm_api(messages)
+        # return response
+        
         """
         使用问题查询RAG系统。
         
@@ -166,11 +209,10 @@ class RAGAgent:
     def cleanup(self):
         """清理资源，关闭数据库连接"""
         try:
+            # 清理向量存储
             if hasattr(self, 'vector_store') and self.vector_store:
                 # 尝试关闭Chroma连接
                 if hasattr(self.vector_store, '_client'):
-                    # if hasattr(self.vector_store._client, 'reset'):
-                    #     self.vector_store._client.reset()
                     if hasattr(self.vector_store._client, '_system'):
                         if hasattr(self.vector_store._client._system, 'stop'):
                             self.vector_store._client._system.stop()
@@ -178,6 +220,30 @@ class RAGAgent:
                 # 删除向量存储引用
                 del self.vector_store
                 self.vector_store = None
+
+            # 清理LLM资源
+            if hasattr(self, 'llm'):
+                del self.llm
+                self.llm = None
+
+            # 清理embeddings资源
+            if hasattr(self, 'embeddings'):
+                del self.embeddings
+                self.embeddings = None
+
+            # 清理qa_chain资源
+            if hasattr(self, 'qa_chain'):
+                del self.qa_chain
+                self.qa_chain = None
+
+            # 清理memory资源
+            if hasattr(self, 'memory'):
+                del self.memory
+                self.memory = None
+
+            # 强制垃圾回收
+            import gc
+            gc.collect()
 
         except Exception as e:
             print(f"清理资源时出现警告: {e}")

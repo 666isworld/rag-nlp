@@ -2,6 +2,8 @@ import os
 import sys
 import time
 
+from src.agents.rag_agent import RAGAgent
+
 # 兼容性修复：为Python 3.10添加typing.Self支持
 try:
     from typing import Self
@@ -15,10 +17,76 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QTextEdit, QPushButton, QSplitter, QStatusBar,
     QMessageBox, QGroupBox, QProgressBar, QFileDialog, QDialog,
-    QListWidget, QDialogButtonBox, QListWidgetItem, QFrame
+    QListWidget, QDialogButtonBox, QListWidgetItem, QFrame, QComboBox
 )
 from PySide6.QtCore import Qt, QThread, Signal, QSize
 from PySide6.QtGui import QFont, QIcon
+import gc,shutil
+
+class RAGAgentFactory:
+    def __init__(self):
+        self.__agent = None
+    
+    def set_agent(self,agent):
+        print(f"设置前的agent: {self.__agent}")
+        if self.__agent is not None:
+            self.__agent.cleanup()
+            del self.__agent
+        self.__agent = agent
+        print(f"设置后的agent: {self.__agent}")
+    
+    def get_agent(self):
+        return self.__agent
+    
+    def create_agent(self,docs_dir="docs",db_dir="vector_db",model_name="all-MiniLM-L6-v2"):
+        if self.__agent is None:
+            self.__agent = RAGAgent(
+                docs_dir=docs_dir,
+                persist_dir=db_dir,
+                api_base="https://api.ai-gaochao.cn/v1",
+                api_key="sk-LJnOebUUtdz3fZ5V2a3eD48a810c41BfBe7000183bCa0cCf",
+                model_name=model_name
+                )
+        return self.__agent
+
+
+def force_cleanup_database(db_dir):
+    """强制清理数据库文件，处理文件锁定问题"""
+    if not os.path.exists(db_dir):
+        return
+
+    print(f"正在清理数据库目录: {db_dir}")
+
+    # 尝试多次删除，处理文件锁定问题
+    max_attempts = 5
+    for attempt in range(max_attempts):
+        try:
+            if os.path.isdir(db_dir):
+                shutil.rmtree(db_dir)
+            else:
+                os.remove(db_dir)
+            print(f"成功删除数据库目录: {db_dir}")
+            break
+        except PermissionError as e:
+            print(f"尝试 {attempt + 1}/{max_attempts}: 文件被占用，等待释放...")
+            if attempt < max_attempts - 1:
+                time.sleep(2)  # 等待2秒后重试
+                gc.collect()  # 强制垃圾回收
+            else:
+                print(f"警告: 无法删除 {db_dir}，可能被其他进程占用")
+                print("请手动关闭相关进程或重启程序")
+                # 尝试重命名而不是删除
+                try:
+                    backup_name = f"{db_dir}_backup_{int(time.time())}"
+                    os.rename(db_dir, backup_name)
+                    print(f"已将旧数据库重命名为: {backup_name}")
+                except Exception as rename_error:
+                    print(f"重命名也失败: {rename_error}")
+                    raise e
+        except Exception as e:
+            print(f"删除数据库时出错: {e}")
+            if attempt == max_attempts - 1:
+                raise
 
 
 class SheetSelectionDialog(QDialog):
@@ -178,6 +246,7 @@ class DocumentManagerDialog(QDialog):
 
     def upload_documents(self):
         """上传文档"""
+
         file_paths, _ = QFileDialog.getOpenFileNames(
             self,
             "选择要上传的文档",
@@ -311,83 +380,49 @@ class UpdateKnowledgeBaseWorker(QThread):
     error = Signal(str)  # 错误消息
     output_update = Signal(str)  # 输出更新
 
+    def __init__(self, parent, model_name):
+        super().__init__()
+        self.parent_window = parent
+        self.model_name = model_name
+
     def run(self):
         try:
-            script_path = os.path.join("tools", "ingest_documents.py")
-            if not os.path.exists(script_path):
-                self.error.emit(f"错误: 找不到更新脚本 {script_path}")
-                return
-
-            import subprocess
-
-            result = subprocess.run([sys.executable, script_path], check=True)
+            import gc
+            from src.agents.rag_agent import RAGAgent
+            docs_dir,db_dir = "docs","vector_db"
+            self.parent_window.close_all_workers()
+            self.parent_window.rag_agent_factory.set_agent(None)
+            # 强制清理现有向量库
+            force_cleanup_database(db_dir)
+            # 创建RAG代理并处理文档
+            print("开始构建新知识库...")
+            self.parent_window.rag_agent_factory.create_agent(model_name=self.model_name)
+            print("知识库构建完成!")
             self.finished.emit("知识库更新完成！")
-
-            # 运行更新脚本
-            # process = subprocess.Popen(
-            #     [sys.executable, script_path],
-            #     stdout=subprocess.PIPE,
-            #     stderr=subprocess.STDOUT,
-            #     text=True,
-            #     bufsize=1,
-            #     universal_newlines=True
-            # )
-
-            # # 实时读取输出
-            # while True:
-            #     output = process.stdout.readline()
-            #     if output == '' and process.poll() is not None:
-            #         break
-            #     if output:
-            #         self.output_update.emit(output.strip())
-
-            # return_code = process.poll()
-            # if return_code == 0:
-            #     self.finished.emit("知识库更新完成！")
-            # else:
-            #     self.error.emit(f"知识库更新失败，返回码: {return_code}")
-
         except Exception as e:
             self.error.emit(f"更新知识库出错: {str(e)}")
 
 
 class InitializeWorker(QThread):
     """初始化工作线程"""
-    finished = Signal(object, str)  # agent对象, 状态消息
+    finished = Signal(str)  # agent对象, 状态消息
     error = Signal(str)  # 错误消息
     status_update = Signal(str)  # 状态更新
 
+    def __init__(self, parent, model_name):
+        super().__init__()
+        self.parent_window = parent
+        self.model_name = model_name
+
     def run(self):
-        try:
-            from src.agents.rag_agent import RAGAgent
+        # try:
 
-            docs_dir = "docs"
-            db_dir = "vector_db"
+            self.parent_window.rag_agent_factory.create_agent(model_name=self.model_name)
 
-            if not os.path.exists(docs_dir) or len(os.listdir(docs_dir)) == 0:
-                self.error.emit("错误: 没有找到任何文档。请先运行导入文档选项。")
-                return
-
-            need_init = not os.path.exists(db_dir) or len(os.listdir(db_dir) if os.path.isdir(db_dir) else []) == 0
-
-            status_msg = "正在构建新知识库..." if need_init else "正在加载已有知识库..."
-            self.status_update.emit(status_msg)
-
-            agent = RAGAgent(
-                docs_dir=docs_dir,
-                persist_dir=db_dir,
-                api_base="https://api.ai-gaochao.cn/v1",
-                api_key="sk-LJnOebUUtdz3fZ5V2a3eD48a810c41BfBe7000183bCa0cCf"
-            )
-
-            self.finished.emit(agent, "知识库已成功加载！")
-
-        except ImportError as e:
-            error_msg = f"导入RAGAgent失败: {str(e)}。请先修复兼容性问题。"
-            self.error.emit(error_msg)
-        except Exception as e:
-            error_msg = f"初始化出错: {str(e)}"
-            self.error.emit(error_msg)
+            self.finished.emit("知识库已成功加载！")
+        # except Exception as e:
+        #     error_msg = f"初始化出错: {str(e)}"
+        #     self.error.emit(error_msg)
 
 
 class QueryWorker(QThread):
@@ -415,12 +450,13 @@ class SimpleRAGTkApp(QMainWindow):
     def __init__(self):
         """初始化应用"""
         super().__init__()
-        self.agent = None
         self.status = "未初始化"
         self.init_worker = None
         self.query_worker = None
         self.batch_worker = None
         self.update_kb_worker = None
+        self.model_name = "all-MiniLM-L6-v2"
+        self.rag_agent_factory = RAGAgentFactory()
         
         self.setWindowTitle("面向多学科学习的RAG智能助手")
         self.setGeometry(100, 100, 1000, 700)
@@ -509,6 +545,25 @@ class SimpleRAGTkApp(QMainWindow):
         self.status_label = QLabel(self.status)
         self.status_label.setStyleSheet("color: #2196F3; font-weight: bold; padding: 5px;")
         status_layout.addWidget(self.status_label)
+        
+        self.model_combo = QComboBox()
+        self.model_combo.addItem("all-MiniLM-L6-v2（通用）")
+        # self.model_combo.addItem("distiluse-base-multilingual-cased-v1")
+        # self.model_combo.addItem("bert-base-chinese")
+        self.model_combo.currentTextChanged.connect(self.on_model_changed)
+        self.model_combo.setStyleSheet("""
+            QComboBox {
+                border: 1px solid #ddd;
+                border-radius: 4px;
+                padding: 4px;
+                background: white;
+            }
+            QComboBox::drop-down {
+                border: none;
+                width: 20px;
+            }
+        """)
+        status_layout.addWidget(self.model_combo)
         
         # 进度条
         self.progress_bar = QProgressBar()
@@ -670,6 +725,8 @@ class SimpleRAGTkApp(QMainWindow):
         self.update_status("正在初始化知识库...", "#FF9800")
         self.show_progress(True)
         self.init_btn.setEnabled(False)
+        
+        self.update_status(f"正在使用模型 {self.model_name} 初始化...", "#FF9800")
 
         # 清理之前的线程
         if self.init_worker is not None:
@@ -677,17 +734,16 @@ class SimpleRAGTkApp(QMainWindow):
             self.init_worker.wait()
 
         # 创建新的工作线程
-        self.init_worker = InitializeWorker()
+        self.init_worker = InitializeWorker(self,model_name=self.model_name)
         self.init_worker.finished.connect(self._on_initialize_finished)
         self.init_worker.error.connect(self._on_initialize_error)
         self.init_worker.status_update.connect(lambda msg: self.update_status(msg, "#FF9800"))
         self.init_worker.start()
 
-    def _on_initialize_finished(self, agent, message):
+    def _on_initialize_finished(self, message):
         """初始化成功回调"""
         self.show_progress(False)
         self.init_btn.setEnabled(True)
-        self.agent = agent
         self.update_status(message, "#4CAF50")
 
         # 清理线程
@@ -713,7 +769,7 @@ class SimpleRAGTkApp(QMainWindow):
         if not question:
             return
 
-        if not self.agent:
+        if not self.rag_agent_factory.get_agent():
             self.append_to_chat("请先初始化知识库！")
             self.update_status("请先初始化知识库", "#F44336")
             return
@@ -733,7 +789,9 @@ class SimpleRAGTkApp(QMainWindow):
             self.query_worker.wait()
 
         # 创建查询线程
-        self.query_worker = QueryWorker(self.agent, question)
+
+        print(f"查询的agent: {self.rag_agent_factory.get_agent().qa_chain}")
+        self.query_worker = QueryWorker(self.rag_agent_factory.get_agent(), question)
         self.query_worker.finished.connect(self._on_query_finished)
         self.query_worker.error.connect(self._on_query_error)
         self.query_worker.start()
@@ -773,7 +831,7 @@ class SimpleRAGTkApp(QMainWindow):
 
     def batch_import(self):
         """批量导入Excel文件进行处理"""
-        if not self.agent:
+        if not self.rag_agent_factory.get_agent():
             QMessageBox.warning(self, "警告", "请先初始化知识库！")
             return
 
@@ -840,7 +898,7 @@ class SimpleRAGTkApp(QMainWindow):
             self.batch_worker.wait()
 
         # 创建批量处理线程
-        self.batch_worker = BatchProcessWorker(self.agent, file_path, sheet_name, output_path)
+        self.batch_worker = BatchProcessWorker(self.rag_agent_factory.get_agent(), file_path, sheet_name, output_path)
         self.batch_worker.progress_update.connect(self._on_batch_progress)
         self.batch_worker.finished.connect(self._on_batch_finished)
         self.batch_worker.error.connect(self._on_batch_error)
@@ -893,27 +951,13 @@ class SimpleRAGTkApp(QMainWindow):
         self.show_progress(True)
         self.docs_btn.setEnabled(False)
 
-        # 清理现有的agent实例以释放数据库连接
-        # if self.agent:
-        #     try:
-        #         self.agent.cleanup()
-        #         del self.agent
-        #         self.agent = None
-        #         self.append_to_chat("已清理现有知识库连接")
-        #     except Exception as e:
-        #         self.append_to_chat(f"清理现有连接时出现警告: {str(e)}")
-
-        # 强制垃圾回收
-        # import gc
-        # gc.collect()
-
         # 清理之前的更新线程
         if self.update_kb_worker is not None:
             self.update_kb_worker.quit()
             self.update_kb_worker.wait()
 
         # 创建更新线程
-        self.update_kb_worker = UpdateKnowledgeBaseWorker()
+        self.update_kb_worker = UpdateKnowledgeBaseWorker(self,model_name=self.model_name)
         self.update_kb_worker.finished.connect(self._on_update_kb_finished)
         self.update_kb_worker.error.connect(self._on_update_kb_error)
         self.update_kb_worker.output_update.connect(self._on_update_kb_output)
@@ -924,14 +968,15 @@ class SimpleRAGTkApp(QMainWindow):
         # 在聊天区域显示更新进度
         self.append_to_chat(f"更新进度: {output}")
 
-    def _on_update_kb_finished(self, message):
+    def _on_update_kb_finished(self,message):
         """更新知识库完成"""
+
         self.show_progress(False)
         self.docs_btn.setEnabled(True)
         self.update_status(message, "#4CAF50")
 
         # 显示完成消息
-        QMessageBox.information(self, "更新完成", message + "\n建议重新初始化知识库以使用最新数据。")
+        QMessageBox.information(self, "更新完成", message)
 
         # 清理线程
         if self.update_kb_worker:
@@ -939,20 +984,27 @@ class SimpleRAGTkApp(QMainWindow):
             self.update_kb_worker = None
 
     def _on_update_kb_error(self, error_msg):
-        """更新知识库错误"""
-        self.show_progress(False)
+        """处理知识库更新错误"""
+        self.update_status("知识库更新失败", "#F44336")
+        self.append_to_chat(f"知识库更新失败: {error_msg}")
         self.docs_btn.setEnabled(True)
-        self.update_status(error_msg, "#F44336")
-        QMessageBox.critical(self, "更新失败", error_msg)
 
-        # 清理线程
-        if self.update_kb_worker:
-            self.update_kb_worker.deleteLater()
-            self.update_kb_worker = None
+    def on_model_changed(self, new_model):
+        """处理模型选择变化"""
+        self.rag_agent_factory.set_agent(None)
+        # 获取选择的模型
+        selected_model = self.model_combo.currentText()
+        
+        if "distiluse-base" in selected_model:
+            self.model_name = "distiluse-base-multilingual-cased-v1"
+        elif "all-MiniLM" in selected_model:
+            self.model_name = "all-MiniLM-L6-v2"
+        elif "bert-base-chinese" in selected_model:
+            self.model_name = "bert-base-chinese"
+        print(f"模型已更改为: {new_model}")
 
-    def closeEvent(self, event):
-        """窗口关闭事件，清理所有线程"""
-        # 停止所有工作线程
+    def close_all_workers(self):
+        """关闭所有工作线程"""
         if self.init_worker is not None:
             self.init_worker.quit()
             self.init_worker.wait()
@@ -965,9 +1017,10 @@ class SimpleRAGTkApp(QMainWindow):
             self.batch_worker.quit()
             self.batch_worker.wait()
 
-        if self.update_kb_worker is not None:
-            self.update_kb_worker.quit()
-            self.update_kb_worker.wait()
+    def closeEvent(self, event):
+        """窗口关闭事件，清理所有线程"""
+        # 停止所有工作线程
+        self.close_all_workers()
 
         event.accept()
 
